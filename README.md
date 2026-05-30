@@ -16,7 +16,7 @@ Ping、下り速度、上り速度を表示し、それぞれについて一般�
 
 ## インストール
 
-ユーザー単位でインストールする場合:
+### ユーザー単位でインストールする場合
 
 ```bash
 mkdir -p ~/.local/bin
@@ -36,7 +36,7 @@ export PATH="$HOME/.local/bin:$PATH"
 source ~/.bashrc
 ```
 
-複数ユーザーで利用するなど、システム全体に配置する場合:
+### 複数ユーザーで利用するなど、システム全体に配置する場合
 
 ```bash
 curl -L https://raw.githubusercontent.com/shizu-na/speed-sense/main/speed-sense -o speed-sense
