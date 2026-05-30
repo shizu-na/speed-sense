@@ -44,7 +44,7 @@ chmod +x speed-sense
 sudo cp speed-sense /usr/local/bin/speed-sense
 ```
 
-リポジトリを取得してから配置する場合:
+### リポジトリを取得してから配置する場合
 
 ```bash
 git clone https://github.com/shizu-na/speed-sense.git
