@@ -1,0 +1,253 @@
+#!/bin/bash
+
+# ==============================================================================
+# speed-sense : ネットワーク通信速度測定・評価スクリプト
+#
+# 概要:
+#   Ookla公式の Speedtest CLI を利用して現在の通信速度を測定し、
+#   一般的な用途に基づいた実用上の目安（体感速度の指標）をターミナルに表示します。
+#
+# 依存関係:
+#   - speedtest (Ookla公式 Speedtest CLI)
+#   - jq (軽量JSONコマンドラインプロセッサ)
+# ==============================================================================
+
+# --- カラー出力の制御 ---
+# 標準出力 (TTY接続時のみ色付け)
+if [ -t 1 ] && [ -z "${NO_COLOR}" ]; then
+  readonly C_HEAD='\033[1;36m'   # シアン (見出し・進行状況用)
+  readonly C_LABEL='\033[1;33m'  # イエロー (項目名用)
+  readonly C_LINE='\033[0;34m'   # ブルー (区切り線用)
+  readonly C_RESET_OUT='\033[0m' # 標準出力用リセット
+else
+  readonly C_HEAD=''
+  readonly C_LABEL=''
+  readonly C_LINE=''
+  readonly C_RESET_OUT=''
+fi
+
+# 標準エラー出力 (TTY接続時のみ色付け)
+if [ -t 2 ] && [ -z "${NO_COLOR}" ]; then
+  readonly C_ALERT='\033[1;31m'  # レッド (エラー・警告用)
+  readonly C_RESET_ERR='\033[0m' # エラー出力用リセット
+else
+  readonly C_ALERT=''
+  readonly C_RESET_ERR=''
+fi
+
+# --- 共通関数定義 ---
+
+# 依存コマンドの事前チェック
+check_dependencies() {
+  local missing_cmds=()
+  
+  # speedtestコマンドの存在と、Ookla公式版であるかの確認
+  local speedtest_version
+
+  if ! command -v speedtest >/dev/null 2>&1; then
+    missing_cmds+=("speedtest (Ookla公式 Speedtest CLI)")
+  else
+    speedtest_version=$(speedtest --version 2>/dev/null)
+    if [[ "$speedtest_version" != *"Speedtest by Ookla"* ]]; then
+      missing_cmds+=("speedtest (※Python版など別実装ではなく、Ookla公式のCLIが必要です)")
+    fi
+  fi
+
+  # jqコマンドの確認
+  if ! command -v jq >/dev/null 2>&1; then
+    missing_cmds+=("jq (JSONパースユーティリティ)")
+  fi
+
+  # 未インストールのコマンドがある場合、導入手順を標準エラー出力へ案内して終了
+  if [[ ${#missing_cmds[@]} -ne 0 ]]; then
+    {
+      printf "${C_ALERT}エラー: speed-sense の実行に必要なコマンドが見つかりません。${C_RESET_ERR}\n"
+      printf "不足しているコマンド:\n"
+      local cmd
+      for cmd in "${missing_cmds[@]}"; do
+        printf "  - %s\n" "$cmd"
+      done
+      printf "\n【インストール方法の目安】\n"
+      if [[ "$OSTYPE" == "darwin"* ]]; then
+        printf "  Mac (Homebrew) をご利用の場合:\n"
+        printf "    brew tap ookla/speedtest\n"
+        printf "    brew install speedtest jq\n"
+      elif [[ -f /etc/debian_version ]]; then
+        printf "  Ubuntu/Debian 系をご利用の場合:\n"
+        printf "    sudo apt update\n"
+        printf "    sudo apt install jq\n"
+        printf "    ※ speedtest公式CLIの導入手順は公式サイトをご確認ください: https://www.speedtest.net/apps/cli\n"
+      else
+        printf "  お使いのOSのパッケージマネージャから 'speedtest' (Ookla公式) と 'jq' をインストールしてください。\n"
+      fi
+    } >&2
+    exit 1
+  fi
+}
+
+# 目安一覧表の表示
+show_list() {
+  printf "${C_HEAD}======================================${C_RESET_OUT}\n"
+  printf " 通信速度の目安一覧表 (speed-sense)\n"
+  printf "${C_HEAD}======================================${C_RESET_OUT}\n\n"
+  
+  printf "${C_LABEL}[下り速度 (Download) - 受信]${C_RESET_OUT}\n"
+  printf "  ～ 5 Mbps    : 制限あり (テキスト中心のWeb閲覧、メール送受信向け)\n"
+  printf "  5 ～ 20 Mbps : 標準的   (一般的なWebブラウジング、標準画質～フルHD動画向け)\n"
+  printf "  20 ～ 100 Mbps: 良好     (4K動画ストリーミング、複数端末でのネットワーク共有向け)\n"
+  printf "  100 Mbps ～  : 高速     (大容量ファイルの送受信、ゲームのダウンロード向け)\n\n"
+  
+  printf "${C_LABEL}[上り速度 (Upload) - 送信]${C_RESET_OUT}\n"
+  printf "  ～ 3 Mbps    : 制限あり (テキスト送信中心。動画・音声のリアルタイム送信に遅延の可能性)\n"
+  printf "  3 ～ 10 Mbps : 標準的   (日常的なメール送信、一般的な解像度でのWeb会議向け)\n"
+  printf "  10 Mbps ～   : 良好     (高画質動画のアップロード、大容量バックアップ向け)\n\n"
+  
+  printf "${C_LABEL}[Ping (応答速度) - 遅延]${C_RESET_OUT}\n"
+  printf "  ～ 15 ms     : 低遅延   (リアルタイム性の高いオンラインゲームやシビアな通信向け)\n"
+  printf "  15 ～ 50 ms  : 標準的   (一般的なブラウジング、動画視聴において遅延を感じにくい)\n"
+  printf "  50 ms ～     : 遅延あり (リアルタイムな双方向通信においてタイムラグが発生する可能性)\n"
+  printf "${C_LINE}======================================${C_RESET_OUT}\n"
+}
+
+# ヘルプメッセージの表示
+show_help() {
+  printf "使用方法: speed-sense [オプション]\n"
+  printf "オプション:\n"
+  printf "  無指定       速度テストを実行し、結果と実用上の目安を表示します\n"
+  printf "  -l, --list   速度の目安一覧表を表示します\n"
+  printf "  -h, --help   このヘルプメッセージを表示します\n"
+}
+
+
+# --- メイン処理 ---
+main() {
+  # 1. コマンドライン引数の処理と検証
+  case "$#" in
+    0)
+      # 引数なし：通常の測定処理へ
+      ;;
+    1)
+      case "$1" in
+        -l|--list)
+          show_list
+          exit 0
+          ;;
+        -h|--help)
+          show_help
+          exit 0
+          ;;
+        *)
+          {
+            printf "${C_ALERT}エラー: 無効なオプションです: %s${C_RESET_ERR}\n\n" "$1"
+            show_help
+          } >&2
+          exit 2
+          ;;
+      esac
+      ;;
+    *)
+      {
+        printf "${C_ALERT}エラー: 引数が多すぎます。${C_RESET_ERR}\n\n"
+        show_help
+      } >&2
+      exit 2
+      ;;
+  esac
+
+  # 2. 測定の準備と実行
+  check_dependencies
+
+  printf "${C_HEAD}速度テストを実行中...（数十秒かかります）${C_RESET_OUT}\n"
+
+  local raw_output
+  local result_json
+
+  # 標準入力を /dev/null に向けることで、初回同意プロンプト等によるスクリプトのフリーズを回避
+  raw_output=$(speedtest --format=json < /dev/null 2>&1)
+
+  # jqを活用して結果のJSONオブジェクトのみを確実に抽出
+  result_json=$(printf "%s\n" "$raw_output" | jq -R -s -c 'split("\n") | map(fromjson?) | map(select(.type == "result")) | last // empty')
+
+  if [[ -z "$result_json" ]]; then
+    {
+      printf "${C_ALERT}エラー: 測定に失敗しました。ネットワーク接続や設定を確認してください。${C_RESET_ERR}\n"
+      printf "${C_ALERT}※初回実行時など、Ooklaの利用規約への同意が必要な場合は測定が失敗します。${C_RESET_ERR}\n"
+      printf "${C_ALERT}  ターミナルで直接 'speedtest' を実行し、規約に同意してから再度お試しください。${C_RESET_ERR}\n\n"
+      printf '%s\n' '--- コマンドの出力ログ ---'
+      printf "%s\n" "$raw_output"
+    } >&2
+    exit 1
+  fi
+
+  # 3. 測定結果の解析
+  local parsed_result=()
+  local parsed_line
+  while IFS= read -r parsed_line; do
+    parsed_result+=("$parsed_line")
+  done < <(
+    printf "%s\n" "$result_json" | jq -r '
+      if (.ping.latency == null or .download.bandwidth == null or .upload.bandwidth == null) then
+        empty
+      else
+        (.ping.latency) as $ping |
+        ((.download.bandwidth * 8 / 1000000)) as $dl |
+        ((.upload.bandwidth * 8 / 1000000)) as $ul |
+        [
+          ($ping | tostring),
+          ($dl | tostring),
+          ($ul | tostring),
+          ($ping | if . < 15 then "低遅延 (応答が速く、FPS等のオンラインゲームに適する)" elif . < 50 then "標準的 (ブラウジングや動画視聴など一般的な用途では問題なし)" else "遅延あり (リアルタイム性が求められる通信ではタイムラグの可能性)" end),
+          ($dl | if . < 5 then "制限あり (テキスト中心のWeb閲覧なら可能)" elif . < 20 then "標準的 (一般的なWeb閲覧やフルHD動画の視聴は可能)" elif . < 100 then "良好 (4K動画の視聴や複数端末での利用も問題なし)" else "高速 (大容量ファイルのダウンロードも短時間で完了)" end),
+          ($ul | if . < 3 then "制限あり (Web会議等で映像や音声が途切れる可能性あり)" elif . < 10 then "標準的 (日常的なメール送信やSNS利用には十分)" else "良好 (クラウドへのバックアップや高画質動画投稿もスムーズ)" end)
+        ][]
+      end
+    '
+  )
+
+  # 必要なデータがすべて取得できているか検証
+  if [[ ${#parsed_result[@]} -ne 6 ]]; then
+    {
+      printf "${C_ALERT}エラー: 結果の解析に失敗しました。JSONのデータ構造が想定と異なります。${C_RESET_ERR}\n\n"
+      printf '%s\n' '--- 取得したJSONデータ ---'
+      printf "%s\n" "$result_json"
+    } >&2
+    exit 1
+  fi
+
+  # 4. 単位の変換とフォーマット整形
+  local ping dl ul ping_formatted dl_eval ul_eval ping_eval
+  ping=${parsed_result[0]}
+  dl=${parsed_result[1]}
+  ul=${parsed_result[2]}
+  ping_eval=${parsed_result[3]}
+  dl_eval=${parsed_result[4]}
+  ul_eval=${parsed_result[5]}
+  ping_formatted=$(printf "%.2f" "$ping")
+  dl=$(printf "%.2f" "$dl")
+  ul=$(printf "%.2f" "$ul")
+
+  # 5. 結果と評価の出力
+  printf "\n${C_HEAD}======================================${C_RESET_OUT}\n"
+  printf " 測定結果 (speed-sense)\n"
+  printf "${C_HEAD}======================================${C_RESET_OUT}\n"
+  printf " ${C_LABEL}Ping (応答速度)${C_RESET_OUT} : %s ms\n" "$ping_formatted"
+  printf " ${C_LABEL}Download (下り)${C_RESET_OUT} : %s Mbps\n" "$dl"
+  printf " ${C_LABEL}Upload (上り)  ${C_RESET_OUT} : %s Mbps\n" "$ul"
+  printf "%s--------------------------------------%s\n" "$C_LINE" "$C_RESET_OUT"
+  printf " 一般的な用途における目安（参考）\n"
+  printf "%s--------------------------------------%s\n" "$C_LINE" "$C_RESET_OUT"
+
+  printf " [下り] "
+  printf "%s\n" "$dl_eval"
+
+  printf " [上り] "
+  printf "%s\n" "$ul_eval"
+
+  printf " [Ping] "
+  printf "%s\n" "$ping_eval"
+
+  printf "${C_HEAD}======================================${C_RESET_OUT}\n"
+}
+
+# --- スクリプトの実行起点を指定 ---
+main "$@"
