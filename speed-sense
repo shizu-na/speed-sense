@@ -15,10 +15,10 @@
 # --- カラー出力の制御 ---
 # 標準出力 (TTY接続時のみ色付け)
 if [ -t 1 ] && [ -z "${NO_COLOR}" ]; then
-  readonly C_HEAD='\033[1;36m'   # シアン (見出し・進行状況用)
-  readonly C_LABEL='\033[1;33m'  # イエロー (項目名用)
-  readonly C_LINE='\033[0;34m'   # ブルー (区切り線用)
-  readonly C_RESET_OUT='\033[0m' # 標準出力用リセット
+  readonly C_HEAD=$'\033[1;36m'
+  readonly C_LABEL=$'\033[1;33m'
+  readonly C_LINE=$'\033[0;34m'
+  readonly C_RESET_OUT=$'\033[0m'
 else
   readonly C_HEAD=''
   readonly C_LABEL=''
@@ -26,10 +26,9 @@ else
   readonly C_RESET_OUT=''
 fi
 
-# 標準エラー出力 (TTY接続時のみ色付け)
 if [ -t 2 ] && [ -z "${NO_COLOR}" ]; then
-  readonly C_ALERT='\033[1;31m'  # レッド (エラー・警告用)
-  readonly C_RESET_ERR='\033[0m' # エラー出力用リセット
+  readonly C_ALERT=$'\033[1;31m'
+  readonly C_RESET_ERR=$'\033[0m'
 else
   readonly C_ALERT=''
   readonly C_RESET_ERR=''
